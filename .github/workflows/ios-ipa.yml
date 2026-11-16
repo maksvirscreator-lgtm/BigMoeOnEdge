@@ -1,0 +1,88 @@
+# Device build for local re-signing; no Apple account or signing secrets in CI.
+# Download the artifact, extract the IPA, and sign it with a provisioning profile
+# granting increased-memory-limit. Ad-hoc signing below is NOT install authorization.
+name: iOS device IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios-ipa]
+    paths: [.github/workflows/ios-ipa.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Record toolchain and source
+        run: |
+          mkdir -p artifacts
+          { git rev-parse HEAD; git submodule status; xcodebuild -version; swift --version; cmake --version; } | tee artifacts/build-info.txt
+      - name: Test Swift client
+        run: swift test --package-path examples/ios/BmoeKit
+      - name: Configure iPhone ARM64 Release
+        run: |
+          cmake -S . -B build-ios-device -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+            -DBMOE_BACKEND_MODULES=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBMOE_BUILD_TESTS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DBMOE_IOS_MEMORY_ENTITLEMENTS=ON \
+            -DBMOE_IOS_EXTENDED_ADDRESSING=OFF
+      - name: Build device app
+        run: |
+          set -o pipefail
+          cmake --build build-ios-device --config Release --target bmoe-app -- \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO -jobs 3 2>&1 | tee artifacts/build.log
+      - name: Validate and package for local re-signing
+        run: |
+          set -euo pipefail
+          APP=$(find build-ios-device -type d -name BigMoeOnEdge.app -path '*Release-iphoneos*' -print -quit)
+          test -n "$APP"
+          plutil -lint "$APP/Info.plist"
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          xcrun lipo -verify_arch arm64 "$APP/$EXE"
+          xcrun vtool -show-build "$APP/$EXE" | tee artifacts/platform.txt
+          grep -Eq 'platform[[:space:]]+IOS$' artifacts/platform.txt
+          xcrun otool -L "$APP/$EXE" | tee artifacts/libraries.txt
+          if grep -Eq '/Users/|/opt/homebrew/|/usr/local/' artifacts/libraries.txt; then
+            echo 'Unexpected host library dependency'; exit 1
+          fi
+          # Embed the requested entitlement for re-signing tools to discover.
+          # A trusted development certificate and matching profile are still required.
+          codesign --force --sign - --entitlements examples/ios/memory.entitlements "$APP"
+          codesign --verify --deep --strict "$APP"
+          codesign -d --entitlements :- "$APP" > artifacts/entitlements.plist
+          mkdir -p staging/Payload
+          ditto "$APP" staging/Payload/BigMoeOnEdge.app
+          (cd staging && zip -qry ../artifacts/BigMoeOnEdge-resign.ipa Payload)
+          unzip -t artifacts/BigMoeOnEdge-resign.ipa
+          (cd artifacts && shasum -a 256 BigMoeOnEdge-resign.ipa > SHA256SUMS.txt)
+          echo 'Device ARM64 build; requires local Apple signing. Not yet tested on a physical iPhone.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload IPA and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: BigMoeOnEdge-iOS-device
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14

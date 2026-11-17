@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           APP=$(find build-ios-device -type d -name BigMoeOnEdge.app -path '*/bin/Release/*' -print -quit)
-          test -n "$APP"
+          test -n "$APP"; grep -Eq 'swiftc -module-name MarkdownUI .*-Onone' artifacts/build.log || { echo 'MarkdownUI was not built with -Onone'; exit 1; }
           plutil -lint "$APP/Info.plist"
           EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
           xcrun lipo "$APP/$EXE" -verify_arch arm64

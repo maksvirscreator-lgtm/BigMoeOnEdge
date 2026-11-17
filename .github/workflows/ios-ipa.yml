@@ -60,9 +60,9 @@ jobs:
           test -n "$APP"
           plutil -lint "$APP/Info.plist"
           EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
-          xcrun lipo -verify_arch arm64 "$APP/$EXE"
+          xcrun lipo "$APP/$EXE" -verify_arch arm64
           xcrun vtool -show-build "$APP/$EXE" | tee artifacts/platform.txt
-          grep -Eq 'platform[[:space:]]+IOS$' artifacts/platform.txt
+          grep -Eq 'platform[[:space:]]+IOS([[:space:]]|$)' artifacts/platform.txt
           xcrun otool -L "$APP/$EXE" | tee artifacts/libraries.txt
           if grep -Eq '/Users/|/opt/homebrew/|/usr/local/' artifacts/libraries.txt; then
             echo 'Unexpected host library dependency'; exit 1

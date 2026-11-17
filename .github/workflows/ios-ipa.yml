@@ -56,7 +56,7 @@ jobs:
       - name: Validate and package for local re-signing
         run: |
           set -euo pipefail
-          APP=$(find build-ios-device -type d -name BigMoeOnEdge.app -path '*Release-iphoneos*' -print -quit)
+          APP=$(find build-ios-device -type d -name BigMoeOnEdge.app -path '*/bin/Release/*' -print -quit)
           test -n "$APP"
           plutil -lint "$APP/Info.plist"
           EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")

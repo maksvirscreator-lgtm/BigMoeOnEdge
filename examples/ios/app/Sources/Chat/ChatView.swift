@@ -1,6 +1,15 @@
 import BmoeKit
+import Combine
 import PhotosUI
 import SwiftUI
+import UIKit
+
+/// Hides the keyboard, wherever the focus is.
+enum Keyboard {
+    static func hide() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
 
 /// Chat (docs/screens.md, docs/chat.md): a conversation held by the server, plain chat on a phone,
 /// with its messages as the answer streams (the model's thinking folded above its answer, and the
@@ -75,7 +84,9 @@ struct ChatView: View {
                 }
                 .padding(Grid.m)
             }
-            .scrollDismissesKeyboard(.interactively)
+            // Scrolling or tapping the messages hides the keyboard, so the tab bar is reachable again.
+            .scrollDismissesKeyboard(.immediately)
+            .simultaneousGesture(TapGesture().onEnded { Keyboard.hide() })
             .onChange(of: chat.items) { _ in proxy.scrollTo(Self.bottom, anchor: .bottom) }
             .onChange(of: chat.decisions.count) { _ in withAnimation { proxy.scrollTo(Self.bottom, anchor: .bottom) } }
         }
@@ -133,6 +144,7 @@ struct Composer: View {
     @State private var picking = false
     @State private var picked: [PhotosPickerItem] = []
     @State private var takingPhoto = false
+    @State private var keyboardShown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Grid.s) {
@@ -174,6 +186,8 @@ struct Composer: View {
             picked = []
             Task { await attach(items) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardShown = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
         .fullScreenCover(isPresented: $takingPhoto) {
             CameraPicker { data in
                 imageError = PickedImage.attach(mime: ImageAttachments.fallbackMIME, data: data, to: &images)
@@ -209,6 +223,13 @@ struct Composer: View {
                 chip(choosing ? "Choosing" : "Add", icon: choosing ? "checklist.checked" : "plus", on: choosing)
             }
             .accessibilityLabel(choosing ? "Choosing from options" : "Add to the message")
+            Spacer()
+            if keyboardShown {
+                Button { Keyboard.hide() } label: {
+                    chip("Hide", icon: "keyboard.chevron.compact.down")
+                }
+                .accessibilityLabel("Hide keyboard")
+            }
         }
     }
 
@@ -278,6 +299,8 @@ struct Composer: View {
     }
 
     private func submit() {
+        // Sent: the keyboard goes, so the answer and the tab bar are in view.
+        Keyboard.hide()
         if choosing {
             chat.choose(input, options: Decide.parseOptions(options))
             input = ""
